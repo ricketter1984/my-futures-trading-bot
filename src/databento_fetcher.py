@@ -34,7 +34,7 @@ def fetch_databento_historical_data(symbol, start_date, end_date, schema="ohlcv-
         data_stream = client.timeseries.get_range(
             dataset="GLBX.MDP3", # CME Globex MDP 3.0 dataset
             schema=schema,
-            symbols=[symbol],
+            symbols=[symbol], # Use raw symbol directly
             start=start_date,
             end=end_date,
             limit=limit_rows
@@ -48,12 +48,21 @@ def fetch_databento_historical_data(symbol, start_date, end_date, schema="ohlcv-
 
         # Process DataFrame based on schema
         if schema == 'trades':
-            df = df[['ts_event', 'price', 'size', 'side']]
-            df.columns = ['timestamp', 'price', 'size', 'side']
+            # For trades, we need to aggregate to OHLCV bars
+            df = df[['ts_event', 'price', 'size']]
+            df.columns = ['timestamp', 'price', 'size']
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             df = df.set_index('timestamp')
             df['size'] = df['size'].astype(float)
             df['price'] = df['price'].astype(float)
+            
+            # Aggregate trades to 1-minute OHLCV bars
+            ohlc = df['price'].resample('1min').ohlc()
+            volume = df['size'].resample('1min').sum()
+            df = pd.concat([ohlc, volume], axis=1)
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            df = df.dropna()
+            
         elif schema.startswith('ohlcv'): # Handles 'ohlcv-1m', 'ohlcv-1h', etc.
             df = df[['ts_event', 'open', 'high', 'low', 'close', 'volume']]
             df.columns = ['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume']
@@ -67,7 +76,7 @@ def fetch_databento_historical_data(symbol, start_date, end_date, schema="ohlcv-
         print(f"Successfully fetched {len(df)} rows of {schema} data for {symbol}.")
         return df
 
-    except db.common.db_exc.DatabentoError as e:
+    except Exception as e:
         print(f"Databento API error: {e}")
         return None
     except Exception as e:

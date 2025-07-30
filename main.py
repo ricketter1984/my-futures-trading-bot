@@ -2,6 +2,8 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 import pandas as pd
+import databento as db # Ensure this is at the top of your file with other imports
+from databento.common import error
 
 # Import modules from our src directory
 from src.strategy import MomentumIgnitionStrategy
@@ -16,12 +18,13 @@ def run_backtest():
 
     # --- 1. Configure Data Fetching & Backtester Parameters ---
     # IMPORTANT: Changed to a SPECIFIC futures contract symbol for September 2025.
-    TARGET_SYMBOL = "ESU25"  # <<< IMPORTANT: Changed to "ESU25"
+    TARGET_SYMBOL = "ESZ4"  # <<< IMPORTANT: Using the working futures symbol we found
 
     # Set a very short, specific date range for quick testing (e.g., 1 hour of data from a recent trading day)
-    target_date = datetime(2025, 7, 29) # Target specific trading day
-    START_DATE = target_date.strftime('%Y-%m-%dT09:30:00') # Start of NYSE session (common for futures activity)
-    END_DATE = target_date.strftime('%Y-%m-%dT10:30:00')   # 1 hour later
+    # ESZ4 data is available from 2024-11-29 to 2024-12-02
+    # Use November 29, 2024 (Friday) which should be a trading day
+    START_DATE = "2024-11-29T09:30:00" # Start of trading session
+    END_DATE = "2024-11-29T10:30:00"   # 1 hour later
     
     INITIAL_CAPITAL = 100000.0
     COMMISSION_PER_TRADE = 0.005
@@ -32,7 +35,7 @@ def run_backtest():
         symbol=TARGET_SYMBOL,
         start_date=START_DATE,
         end_date=END_DATE,
-        schema="ohlcv-1m" # Make sure this schema is explicitly passed
+        schema="trades" # Try trades schema instead of ohlcv-1m
     )
 
     if data is None or data.empty:
@@ -137,5 +140,58 @@ def run_backtest():
 
     print("\nOptimization and backtest complete.")
 
+def list_databento_futures_symbols():
+    """
+    Temporarily lists available futures symbols for GLBX.MDP3 from Databento.
+    """
+    load_dotenv()
+    api_key = os.getenv("DATABENTO_API_KEY")
+
+    if not api_key:
+        print("Error: DATABENTO_API_KEY is missing in your .env file. Please add it.")
+        return
+
+    try:
+        client = db.Historical(key=api_key)
+        print("\n--- Fetching symbol list for GLBX.MDP3 ---")
+        
+        # List all available symbols for the GLBX.MDP3 dataset
+        # This might return a large list. We'll filter for common futures products.
+        symbols_df = client.symbology.resolve(
+            dataset="GLBX.MDP3",
+            symbols=["ESZ4", "ESF5", "ESU25", "MNQZ4", "MNQF5", "MYMZ4", "MYMF5"],  # Try specific futures contract symbols
+            stype_in='raw_symbol',
+            stype_out='instrument_id',
+            start_date='2024-12-01',
+            end_date='2024-12-02'
+        )
+        
+        print("\n--- Symbol Resolution Results for GLBX.MDP3 ---")
+        print(f"Response status: {symbols_df.get('status', 'Unknown')}")
+        print(f"Response message: {symbols_df.get('message', 'Unknown')}")
+        
+        print(f"\nFull response: {symbols_df}")
+        
+        print("\n--- Symbol Resolution Results ---")
+        for symbol, results in symbols_df.get('result', {}).items():
+            if results:
+                print(f"\n✅ {symbol}: {len(results)} instrument(s) found")
+                for i, item in enumerate(results[:5]):  # Show first 5 results
+                    print(f"  {i+1}. Instrument ID: {item.get('s', 'N/A')}, Date Range: {item.get('d0', 'N/A')} to {item.get('d1', 'N/A')}")
+            else:
+                print(f"\n❌ {symbol}: No instruments found")
+        
+        if symbols_df.get('not_found'):
+            print(f"\n❌ Not found symbols: {symbols_df.get('not_found', [])}")
+        
+        if symbols_df.get('partial'):
+            print(f"\n⚠️  Partial matches: {symbols_df.get('partial', [])}")
+
+    except Exception as e:
+        print(f"Databento API error while listing symbols: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
 if __name__ == "__main__":
-    run_backtest()
+    # list_databento_futures_symbols() # Call the symbol listing function
+    run_backtest() # Test with the working ESZ4 symbol
