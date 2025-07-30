@@ -79,7 +79,10 @@ class MomentumIgnitionStrategy:
                    'fast_stoch_k_period_2': 14, 'fast_stoch_d_period_2': 3, 'fast_stoch_smoothing_2': 3,
                    'slow_stoch_k_period_1': 40, 'slow_stoch_d_period_1': 4, 'slow_stoch_smoothing_1': 4,
                    'slow_stoch_k_period_2': 60, 'slow_stoch_d_period_2': 10, 'slow_stoch_smoothing_2': 10,
-                   'stoch_oversold': 20, 'stoch_overbought': 80, 'macd_cross_threshold': 0 # For MACD line crossing signal line
+                   'stoch_oversold': 20, 'stoch_overbought': 80,
+                   'stoch_oversold_60_10_10_alert': 15, # NEW
+                   'stoch_overbought_60_10_10_alert': 85, # NEW
+                   'macd_cross_threshold': 0
                    }
         """
         self.params = params
@@ -90,8 +93,8 @@ class MomentumIgnitionStrategy:
 
     def _check_stochastic_confirmations(self, df):
         """
-        Checks if the stochastic conditions for entry are met.
-        Uses the 'quad stochastics' approach.
+        Checks if the stochastic conditions for entry are met based on user's refined logic.
+        Looks for all stochastics in OS/OB and 60,10,10 K% cross D%.
         """
         # Fast Stochastic (9, 3, 3)
         fast_k_9_3_3, fast_d_9_3_3 = calculate_stochastic(
@@ -111,68 +114,85 @@ class MomentumIgnitionStrategy:
         )
 
         # Ensure all series have enough data and are not NaN at the latest point
-        if any(s.empty or s.iloc[-1] is np.nan for s in [fast_k_9_3_3, fast_d_9_3_3, fast_k_14_3_3, fast_d_14_3_3,
-                                                        slow_k_40_4_4, slow_d_40_4_4, slow_k_60_10_10, slow_d_60_10_10]):
+        if any(s.empty or s.iloc[-1] is np.nan or (len(s) < 2 or s.iloc[-2] is np.nan) for s in [
+            fast_k_9_3_3, fast_d_9_3_3, fast_k_14_3_3, fast_d_14_3_3,
+            slow_k_40_4_4, slow_d_40_4_4, slow_k_60_10_10, slow_d_60_10_10
+        ]):
             return {'long': False, 'short': False}
 
-        # Your specific stochastic confirmation logic goes here.
-        # Based on your mean reversion strategy ("over extended two to three standard VWAP deviations"),
-        # for a LONG, you'd want stochastics to be oversold and turning up.
-        # For a SHORT, you'd want stochastics to be overbought and turning down.
-
-        # Example logic: All %K and %D lines are oversold for long, or overbought for short.
-        # And %K crosses above %D for long, or below %D for short.
-        
-        # Long confirmation: All K/D are below oversold threshold and K crosses above D
-        long_stoch_ok = (
+        # --- Long Confirmation for Stochastics ---
+        # 1. All K/D are below oversold threshold
+        all_stochs_oversold = (
             (fast_k_9_3_3.iloc[-1] < self.params['stoch_oversold'] and fast_d_9_3_3.iloc[-1] < self.params['stoch_oversold']) and
             (fast_k_14_3_3.iloc[-1] < self.params['stoch_oversold'] and fast_d_14_3_3.iloc[-1] < self.params['stoch_oversold']) and
             (slow_k_40_4_4.iloc[-1] < self.params['stoch_oversold'] and slow_d_40_4_4.iloc[-1] < self.params['stoch_oversold']) and
             (slow_k_60_10_10.iloc[-1] < self.params['stoch_oversold'] and slow_d_60_10_10.iloc[-1] < self.params['stoch_oversold'])
         )
-        # Add cross-up confirmation (K crosses above D) for long
-        long_cross_ok = (
-            (fast_k_9_3_3.iloc[-2] < fast_d_9_3_3.iloc[-2] and fast_k_9_3_3.iloc[-1] > fast_d_9_3_3.iloc[-1]) or
-            (fast_k_14_3_3.iloc[-2] < fast_d_14_3_3.iloc[-2] and fast_k_14_3_3.iloc[-1] > fast_d_14_3_3.iloc[-1])
-            # You might want to be more specific here, e.g., only the slowest stochastics need to cross, or all of them.
-            # For simplicity, let's say at least one fast stochastic cross-up.
-        )
         
-        # Short confirmation: All K/D are above overbought threshold and K crosses below D
-        short_stoch_ok = (
+        # 2. 60,10,10 K% crosses above D% (safer trade entry)
+        # We also check the alert level as per user's input, if 60,10,10 K% drops below it.
+        stoch_60_10_10_k = slow_k_60_10_10.iloc[-1]
+        stoch_60_10_10_d = slow_d_60_10_10.iloc[-1]
+        stoch_60_10_10_k_prev = slow_k_60_10_10.iloc[-2]
+        stoch_60_10_10_d_prev = slow_d_60_10_10.iloc[-2]
+
+        stoch_60_10_10_cross_up = (stoch_60_10_10_k_prev < stoch_60_10_10_d_prev and stoch_60_10_10_k > stoch_60_10_10_d)
+        
+        # Optional: Alert level check - can be an alert, but for entry, combined with cross
+        stoch_60_10_10_at_alert_level_long = stoch_60_10_10_k <= self.params['stoch_oversold_60_10_10_alert']
+
+        long_stoch_ok = all_stochs_oversold and stoch_60_10_10_cross_up and stoch_60_10_10_at_alert_level_long
+
+        # --- Short Confirmation for Stochastics ---
+        # 1. All K/D are above overbought threshold
+        all_stochs_overbought = (
             (fast_k_9_3_3.iloc[-1] > self.params['stoch_overbought'] and fast_d_9_3_3.iloc[-1] > self.params['stoch_overbought']) and
             (fast_k_14_3_3.iloc[-1] > self.params['stoch_overbought'] and fast_d_14_3_3.iloc[-1] > self.params['stoch_overbought']) and
             (slow_k_40_4_4.iloc[-1] > self.params['stoch_overbought'] and slow_d_40_4_4.iloc[-1] > self.params['stoch_overbought']) and
             (slow_k_60_10_10.iloc[-1] > self.params['stoch_overbought'] and slow_d_60_10_10.iloc[-1] > self.params['stoch_overbought'])
         )
-        # Add cross-down confirmation (K crosses below D) for short
-        short_cross_ok = (
-            (fast_k_9_3_3.iloc[-2] > fast_d_9_3_3.iloc[-2] and fast_k_9_3_3.iloc[-1] < fast_d_9_3_3.iloc[-1]) or
-            (fast_k_14_3_3.iloc[-2] > fast_d_14_3_3.iloc[-2] and fast_k_14_3_3.iloc[-1] < fast_d_14_3_3.iloc[-1])
-        )
+        
+        # 2. 60,10,10 K% crosses below D% (safer trade entry)
+        stoch_60_10_10_cross_down = (stoch_60_10_10_k_prev > stoch_60_10_10_d_prev and stoch_60_10_10_k < stoch_60_10_10_d)
 
-        return {'long': long_stoch_ok and long_cross_ok, 'short': short_stoch_ok and short_cross_ok}
+        # Optional: Alert level check - if 60,10,10 K% goes above it.
+        stoch_60_10_10_at_alert_level_short = stoch_60_10_10_k >= self.params['stoch_overbought_60_10_10_alert']
+
+        short_stoch_ok = all_stochs_overbought and stoch_60_10_10_cross_down and stoch_60_10_10_at_alert_level_short
+
+        return {'long': long_stoch_ok, 'short': short_stoch_ok}
 
     def _check_macd_confirmation(self, df):
         """
-        Checks if the MACD conditions for entry are met.
-        For long: MACD line crosses above Signal line (or is already above).
-        For short: MACD line crosses below Signal line (or is already below).
+        Checks if the MACD conditions for entry are met based on user's refined logic.
+        Looks for MACD below/above 0, moving towards 0, and histogram flip.
         """
-        macd_line, signal_line, _ = calculate_macd(
+        macd_line, signal_line, histogram = calculate_macd(
             df, self.params['macd_fast_period'], self.params['macd_slow_period'], self.params['macd_signal_period']
         )
 
-        if macd_line.empty or signal_line.empty or macd_line.iloc[-1] is np.nan or signal_line.iloc[-1] is np.nan:
+        if macd_line.empty or signal_line.empty or histogram.empty or \
+           macd_line.iloc[-1] is np.nan or signal_line.iloc[-1] is np.nan or histogram.iloc[-1] is np.nan or \
+           (len(histogram) < 2 or histogram.iloc[-2] is np.nan):
             return {'long': False, 'short': False}
         
-        # Check for cross-up for long (MACD crosses above Signal)
-        long_macd_ok = (macd_line.iloc[-2] < signal_line.iloc[-2] and macd_line.iloc[-1] > signal_line.iloc[-1]) or \
-                       (macd_line.iloc[-1] > signal_line.iloc[-1] and macd_line.iloc[-1] > self.params['macd_cross_threshold']) # Already above and positive
+        # --- Long Confirmation for MACD ---
+        # 1. MACD line AND Signal line are both under 0 (deep sweep visible)
+        macd_under_zero = (macd_line.iloc[-1] < 0 and signal_line.iloc[-1] < 0)
+        
+        # 2. Histogram flips from negative to positive
+        histogram_flip_pos = (histogram.iloc[-2] < 0 and histogram.iloc[-1] > 0)
+        
+        long_macd_ok = macd_under_zero and histogram_flip_pos
 
-        # Check for cross-down for short (MACD crosses below Signal)
-        short_macd_ok = (macd_line.iloc[-2] > signal_line.iloc[-2] and macd_line.iloc[-1] < signal_line.iloc[-1]) or \
-                        (macd_line.iloc[-1] < signal_line.iloc[-1] and macd_line.iloc[-1] < -self.params['macd_cross_threshold']) # Already below and negative
+        # --- Short Confirmation for MACD ---
+        # 1. MACD line AND Signal line are both above 0
+        macd_above_zero = (macd_line.iloc[-1] > 0 and signal_line.iloc[-1] > 0)
+        
+        # 2. Histogram flips from positive to negative
+        histogram_flip_neg = (histogram.iloc[-2] > 0 and histogram.iloc[-1] < 0)
+        
+        short_macd_ok = macd_above_zero and histogram_flip_neg
 
         return {'long': long_macd_ok, 'short': short_macd_ok}
 
@@ -192,7 +212,7 @@ class MomentumIgnitionStrategy:
             self.params['slow_stoch_k_period_1'], self.params['slow_stoch_d_period_1'], self.params['slow_stoch_smoothing_1'],
             self.params['slow_stoch_k_period_2'], self.params['slow_stoch_d_period_2'], self.params['slow_stoch_smoothing_2'],
             self.params['macd_fast_period'], self.params['macd_slow_period'], self.params['macd_signal_period']
-        ) + 1 # Add 1 for shift operations or initial valid data point
+        ) + 2 # Add 2 for shift operations (e.g., histogram[-2]) or initial valid data point
 
         if len(current_data_slice) < max_lookback:
             # Not enough historical data for all indicators to be valid
@@ -287,4 +307,4 @@ class MomentumIgnitionStrategy:
                 self.trailing_stop_price = self.entry_price + (current_atr * self.params['atr_stop_multiple'])
     
     def get_signals(self):
-        return pd.DataFrame(self.signals) 
+        return pd.DataFrame(self.signals)
